@@ -24,7 +24,17 @@
       <a href="{% if URL_PREFIX %}/{{ URL_PREFIX }}/model_info/{% else %}/model_info/{% endif %}">
           <button>Model Information</button>
       </a>
+
+      <span style="margin-left: 20px; display: inline-flex; align-items: center; gap: 8px;">
+        <label for="predict_mode_select" style="font-weight: bold; font-size: 15px; color: #333;">Predict Semester:</label>
+        <select id="predict_mode_select" style="margin-top: 0; padding: 6px 12px; font-size: 15px; border-radius: 4px; border: 1px solid #ccc; background-color: #fff; cursor: pointer;">
+          <option value="future" selected>Future semester offered</option>
+          <option value="current">Current/most recent semester offered</option>
+          <option value="prior">Prior semester offered</option>
+        </select>
+      </span>
   </p>
+
 
     <!--Dropdown menu for course form selection-->
     <form>
@@ -51,171 +61,235 @@
     document.getElementById("course-data").textContent
   );
 
-  const groupedData = {};
-  for (const entry of courseDataRaw) {
-    const code = entry.code;
-    const termLabel = entry.term_name;
+  const isStructured = Boolean(courseDataRaw && courseDataRaw.predictions && courseDataRaw.historical);
+  const historicalList = isStructured ? courseDataRaw.historical : (Array.isArray(courseDataRaw) ? courseDataRaw : []);
+  const predictionsMap = isStructured ? courseDataRaw.predictions : {};
 
-    if (!groupedData[code]) {
-      groupedData[code] = { 
+  // Index historical data by course code
+  const historicalByCourse = {};
+  for (const entry of historicalList) {
+    const code = entry.code;
+    if (!historicalByCourse[code]) {
+      historicalByCourse[code] = {
         title: entry.title || code,
-        x: [], 
-        y: [], 
-        arima_forecast: null,
-        sarima_forecast: null,
-        arimax_forecast: null,
-        sarimax_forecast: null,
-        arima_mae: null,
-        sarima_mae: null,
-        arimax_mae: null,
-        sarimax_mae: null,
-        yearly_course: false
+        terms: [],
+        x: [],
+        y: []
       };
     }
-
-    //Historical data
-    if (entry.enrolled !== null) {
-      groupedData[code].x.push(termLabel);
-      groupedData[code].y.push(entry.enrolled);
-    }
-
-    //Forecast data
-    if (entry.arima_forecast !== null || entry.sarima_forecast !== null || entry.arimax_forecast !== null || entry.sarimax_forecast !== null) {
-      groupedData[code].next_term = entry.term_name;
-      groupedData[code].arima_forecast = entry.arima_forecast;
-      groupedData[code].sarima_forecast = entry.sarima_forecast;
-      groupedData[code].arimax_forecast = entry.arimax_forecast;
-      groupedData[code].sarimax_forecast = entry.sarimax_forecast;
-      groupedData[code].arima_mae = entry.arima_mae;
-      groupedData[code].sarima_mae = entry.sarima_mae;
-      groupedData[code].arimax_mae = entry.arimax_mae;
-      groupedData[code].sarimax_mae = entry.sarimax_mae;
-      groupedData[code].arima_val_terms = entry.arima_val_terms;
-      groupedData[code].arima_val_preds = entry.arima_val_preds;
-      groupedData[code].sarima_val_terms = entry.sarima_val_terms;
-      groupedData[code].sarima_val_preds = entry.sarima_val_preds;
-      groupedData[code].arimax_val_terms = entry.arimax_val_terms;
-      groupedData[code].arimax_val_preds = entry.arimax_val_preds;
-      groupedData[code].sarimax_val_terms = entry.sarimax_val_terms;
-      groupedData[code].sarimax_val_preds = entry.sarimax_val_preds;
-      groupedData[code].yearly_course = entry.yearly_course;
+    if (entry.enrolled !== null && entry.enrolled !== undefined) {
+      historicalByCourse[code].terms.push(Number(entry.term));
+      historicalByCourse[code].x.push(entry.term_name);
+      historicalByCourse[code].y.push(entry.enrolled);
     }
   }
 
   const dropdown = document.getElementById("dropdown");
+  const predictModeSelect = document.getElementById("predict_mode_select");
   const chartDiv = document.getElementById("enrollmentChart");
   const header = document.createElement("header");
-  img = document.createElement("img");
+  const img = document.createElement("img");
   img.src = "https://www.uaa.alaska.edu/_template/assets/img/uaa_logo.svg";
   header.appendChild(img);
   document.getElementById("header").appendChild(header);
 
-  
+  function updatePredictModeLabels(courseCode) {
+    if (!isStructured || !predictionsMap[courseCode] || !predictModeSelect) return;
+    const predInfo = predictionsMap[courseCode];
+    const targets = predInfo.targets || {};
 
-  dropdown.addEventListener("change", () => {
+    const optFuture = predictModeSelect.querySelector('option[value="future"]');
+    const optCurrent = predictModeSelect.querySelector('option[value="current"]');
+    const optPrior = predictModeSelect.querySelector('option[value="prior"]');
+
+    if (optFuture && targets.future) {
+      optFuture.textContent = `Future semester offered (${targets.future.term_name})`;
+    }
+    if (optCurrent && targets.current) {
+      optCurrent.textContent = `Current/most recent semester offered (${targets.current.term_name})`;
+    }
+    if (optPrior && targets.prior) {
+      optPrior.textContent = `Prior semester offered (${targets.prior.term_name})`;
+    }
+  }
+
+  function renderChart() {
     const selected = dropdown.value;
-    const data = groupedData[selected];
-    if (!data) {
+    const histData = historicalByCourse[selected];
+    if (!histData) {
       Plotly.purge(chartDiv);
       return;
     }
 
-    const lastTerm = data.x[data.x.length - 1];
-    const hasForecast = data.arima_forecast || data.sarima_forecast || data.arimax_forecast || data.sarimax_forecast;
-    const nextTerm = hasForecast ? (data.next_term) : "Insufficient Data";
+    updatePredictModeLabels(selected);
 
-    //Historical data
+    const selectedMode = predictModeSelect ? (predictModeSelect.value || "future") : "future";
+    let predTarget = null;
+    let isYearly = false;
+
+    if (isStructured && predictionsMap[selected]) {
+      const predInfo = predictionsMap[selected];
+      isYearly = predInfo.yearly_course;
+      predTarget = predInfo.targets ? predInfo.targets[selectedMode] : null;
+    }
+
+    const targetTerm = predTarget ? predTarget.term : null;
+    const targetTermName = predTarget ? predTarget.term_name : null;
+
+    let pastX = [];
+    let pastY = [];
+
+    if (targetTerm) {
+      for (let i = 0; i < histData.terms.length; i++) {
+        if (histData.terms[i] < targetTerm) {
+          pastX.push(histData.x[i]);
+          pastY.push(histData.y[i]);
+        }
+      }
+    } else {
+      pastX = [...histData.x];
+      pastY = [...histData.y];
+    }
+
+    if (pastX.length === 0) {
+      pastX = [...histData.x];
+      pastY = [...histData.y];
+    }
+
+    const lastTerm = pastX[pastX.length - 1];
+    const lastY = pastY[pastY.length - 1];
+
+    const hasForecast = predTarget && (
+      predTarget.arima_forecast !== null ||
+      predTarget.sarima_forecast !== null ||
+      predTarget.arimax_forecast !== null ||
+      predTarget.sarimax_forecast !== null
+    );
+
+    const nextTerm = hasForecast ? targetTermName : (targetTermName ? `${targetTermName} (Insufficient Data)` : "Insufficient Data");
+
+    // Historical data trace
     const tracePast = {
       type: "scatter",
       mode: "lines+markers",
       name: "Historical Data",
       hoverinfo: "x+y",
-      x: data.x,
-      y: data.y,
+      x: pastX,
+      y: pastY,
       line: { width: 3, color: "#007bff" },
       marker: { size: 8 }
     };
 
-    let maes = [data.arima_mae, data.arimax_mae];
-    if (!data.yearly_course) {
-      maes.push(data.sarima_mae, data.sarimax_mae);
+    let maes = [];
+    if (predTarget) {
+      maes = [predTarget.arima_mae, predTarget.arimax_mae];
+      if (!isYearly) {
+        maes.push(predTarget.sarima_mae, predTarget.sarimax_mae);
+      }
+      maes = maes.filter(v => v !== null && !isNaN(v));
     }
-    maes = maes.filter(v => v !== null && !isNaN(v));
     const minMae = maes.length ? Math.min(...maes) : null;
+
     let bestModel = null;
-    if (minMae !== null) {
-      if (data.arima_mae === minMae ) bestModel = "arima";
-      else if (data.sarima_mae === minMae) bestModel = "sarima";
-      else if (data.arimax_mae === minMae) bestModel = "arimax";
-      else if (data.sarimax_mae === minMae) bestModel = "sarimax";
+    if (minMae !== null && predTarget) {
+      if (predTarget.arima_mae === minMae) bestModel = "arima";
+      else if (predTarget.sarima_mae === minMae) bestModel = "sarima";
+      else if (predTarget.arimax_mae === minMae) bestModel = "arimax";
+      else if (predTarget.sarimax_mae === minMae) bestModel = "sarimax";
     }
 
-    //ARIMA forecast
+    // ARIMA forecast
+    const arimaForecast = predTarget ? predTarget.arima_forecast : null;
+    const arimaMae = predTarget ? predTarget.arima_mae : null;
     const traceArima = {
       type: "scatter",
       mode: "lines+markers+text",
-      name: `ARIMA Forecast (Mean Absolute Error: ${data.arima_mae != null ? data.arima_mae.toFixed(1) : "N/A"})`,
+      name: `ARIMA Forecast (MAE: ${arimaMae != null ? arimaMae.toFixed(1) : "N/A"})`,
       hoverinfo: "x+y",
       x: [lastTerm, nextTerm],
-      y: [data.y[data.y.length - 1], data.arima_forecast],
+      y: [lastY, arimaForecast],
       text: ["", "ARIMA"],
       textposition: "top center",
       line: { width: 3, color: "#ff5733", dash: "dot" },
-      marker: { size: [0, 14], color: "#ff5733", symbol: data.arima_mae === minMae ? "star" : "circle" },
-      opacity: data.arima_mae === minMae ? 1 : 0.5,
-      showlegend: data.arima_forecast !== null && !isNaN(data.arima_forecast) ? true : false
+      marker: { size: [0, 14], color: "#ff5733", symbol: arimaMae === minMae ? "star" : "circle" },
+      opacity: arimaMae === minMae ? 1 : 0.5,
+      showlegend: arimaForecast !== null && !isNaN(arimaForecast)
     };
 
-    //SARIMA forecast
+    // SARIMA forecast
+    const sarimaForecast = predTarget ? predTarget.sarima_forecast : null;
+    const sarimaMae = predTarget ? predTarget.sarima_mae : null;
     const traceSarima = {
       type: "scatter",
       mode: "lines+markers+text",
-      name: `SARIMA Forecast (Mean Absolute Error: ${data.sarima_mae != null ? data.sarima_mae.toFixed(1) : "N/A"})`,
+      name: `SARIMA Forecast (MAE: ${sarimaMae != null ? sarimaMae.toFixed(1) : "N/A"})`,
       hoverinfo: "x+y",
       x: [lastTerm, nextTerm],
-      y: [data.y[data.y.length - 1], data.sarima_forecast],
+      y: [lastY, sarimaForecast],
       text: ["", "SARIMA"],
       textposition: "bottom center",
       line: { width: 3, color: "#ffa500", dash: "dot" },
-      marker: { size: [0, 14], color: "#ffa500", symbol: data.sarima_mae === minMae ? "star" : "circle" },
-      opacity: data.sarima_mae === minMae ? 1 : 0.5,
-      showlegend: (data.sarima_forecast !== null && !isNaN(data.sarima_forecast) ? true : false)
+      marker: { size: [0, 14], color: "#ffa500", symbol: sarimaMae === minMae ? "star" : "circle" },
+      opacity: sarimaMae === minMae ? 1 : 0.5,
+      showlegend: sarimaForecast !== null && !isNaN(sarimaForecast)
     };
 
-    //ARIMAX forecast
+    // ARIMAX forecast
+    const arimaxForecast = predTarget ? predTarget.arimax_forecast : null;
+    const arimaxMae = predTarget ? predTarget.arimax_mae : null;
     const traceArimax = {
       type: "scatter",
       mode: "lines+markers+text",
-      name: `ARIMAX Forecast (Mean Absolute Error: ${data.arimax_mae != null ? data.arimax_mae.toFixed(1) : "N/A"})`,
+      name: `ARIMAX Forecast (MAE: ${arimaxMae != null ? arimaxMae.toFixed(1) : "N/A"})`,
       hoverinfo: "x+y",
       x: [lastTerm, nextTerm],
-      y: [data.y[data.y.length - 1], data.arimax_forecast],
+      y: [lastY, arimaxForecast],
       text: ["", "ARIMAX"],
       textposition: "top center",
       line: { width: 3, color: "#8000ff", dash: "dot" },
-      marker: { size: [0, 14], color: "#8000ff", symbol: (data.arimax_mae ?? 0) === minMae ? "star" : "circle" },
-      opacity: data.arimax_mae === minMae ? 1 : 0.5,
-      showlegend: data.arimax_forecast !== null && !isNaN(data.arimax_forecast) ? true : false
+      marker: { size: [0, 14], color: "#8000ff", symbol: (arimaxMae ?? 0) === minMae ? "star" : "circle" },
+      opacity: arimaxMae === minMae ? 1 : 0.5,
+      showlegend: arimaxForecast !== null && !isNaN(arimaxForecast)
     };
 
-    //SARIMAX forecast
+    // SARIMAX forecast
+    const sarimaxForecast = predTarget ? predTarget.sarimax_forecast : null;
+    const sarimaxMae = predTarget ? predTarget.sarimax_mae : null;
     const traceSarimax = {
       type: "scatter",
       mode: "lines+markers+text",
-      name: `SARIMAX Forecast (Mean Absolute Error: ${data.sarimax_mae != null ? data.sarimax_mae.toFixed(1) : "N/A"})`,
+      name: `SARIMAX Forecast (MAE: ${sarimaxMae != null ? sarimaxMae.toFixed(1) : "N/A"})`,
       hoverinfo: "x+y",
       x: [lastTerm, nextTerm],
-      y: [data.y[data.y.length - 1], data.sarimax_forecast],
+      y: [lastY, sarimaxForecast],
       text: ["", "SARIMAX"],
       textposition: "bottom center",
       line: { width: 3, color: "#00cc44", dash: "dot" },
-      marker: { size: [0, 14], color: "#00cc44", symbol: (data.sarimax_mae ?? 0) === minMae ? "star" : "circle" },
-      opacity: data.sarimax_mae === minMae ? 1 : 0.5,
-      showlegend: data.sarimax_forecast !== null && !isNaN(data.sarimax_forecast) ? true : false
+      marker: { size: [0, 14], color: "#00cc44", symbol: (sarimaxMae ?? 0) === minMae ? "star" : "circle" },
+      opacity: sarimaxMae === minMae ? 1 : 0.5,
+      showlegend: sarimaxForecast !== null && !isNaN(sarimaxForecast)
     };
 
+    // Actual Enrollment point (if available)
+    let traceActual = null;
+    if (predTarget && predTarget.actual_enrolled !== null && predTarget.actual_enrolled !== undefined) {
+      traceActual = {
+        type: "scatter",
+        mode: "markers+text",
+        name: `Actual Enrollment (${predTarget.actual_enrolled})`,
+        hoverinfo: "x+y",
+        x: [nextTerm],
+        y: [predTarget.actual_enrolled],
+        text: [`Actual: ${predTarget.actual_enrolled}`],
+        textposition: "bottom right",
+        marker: { size: 14, color: "#17a2b8", symbol: "diamond" },
+        showlegend: true
+      };
+    }
+
+    // Validation Trace
     let validationTrace = null;
-    if (bestModel) {
+    if (bestModel && predTarget) {
       const colorMap = {
         arima: "#ff5733",
         sarima: "#ffa500",
@@ -223,8 +297,8 @@
         sarimax: "#00cc44"
       };
 
-      const valTerms = data[`${bestModel}_val_terms`];
-      const valPreds = data[`${bestModel}_val_preds`];
+      const valTerms = predTarget[`${bestModel}_val_terms`];
+      const valPreds = predTarget[`${bestModel}_val_preds`];
 
       if (valTerms && valPreds) {
         const termLabels = valTerms.map(term => {
@@ -251,16 +325,26 @@
       }
     }
 
-    //Chart layout
+    const traces = [tracePast, traceArima, traceArimax];
+    if (!isYearly) {
+      traces.push(traceSarima, traceSarimax);
+    }
+    if (traceActual) {
+      traces.push(traceActual);
+    }
+    if (validationTrace) {
+      traces.push(validationTrace);
+    }
+
     const layout = {
-      title: { text: data.title || selected },
+      title: { text: histData.title || selected },
       xaxis: { title: "Term", automargin: true, tickfont: { size: 12 } },
       yaxis: { 
         title: "Enrollment Count",
         range: [0, null],
         automargin: true,
         rangemode: "tozero"
-       },
+      },
       margin: { t: 80, r: 80, b: 60, l: 80 },
       font: { size: 15 },
       plot_bgcolor: "#fafafa",
@@ -274,22 +358,19 @@
       }
     };
 
-    //Checks if the course is yearly to avoid plotting SARIMA/SARIMAX for those courses
-    const traces = [tracePast, traceArima, traceArimax];
-    if (!data.yearly_course) {
-      traces.push(traceSarima, traceSarimax);
-    }
-
-    if (validationTrace) traces.push(validationTrace);
-    var config = {
+    const config = {
       responsive: true,
       displayModeBar: true,
-      scrollZoom: true};
+      scrollZoom: true
+    };
 
     Plotly.newPlot(chartDiv, traces, layout, config);
-  });
+  }
+
+  dropdown.addEventListener("change", renderChart);
+  predictModeSelect.addEventListener("change", renderChart);
 
   dropdown.value = "CSCE A101";
-  dropdown.dispatchEvent(new Event("change"));
-
+  renderChart();
 </script>
+

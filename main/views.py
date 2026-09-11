@@ -35,17 +35,20 @@ def home(request):
 
     courses = Course.objects.values_list('code', flat=True).distinct().order_by('code')
 
-    forecast_path = os.path.join("main", "forecast_data.json")
+    forecast_path = os.path.join(settings.BASE_DIR, "main", "forecast_data.json")
     if os.path.exists(forecast_path):
         with open(forecast_path, "r") as f:
-            course_data = json.dumps(json.load(f))
+            course_data = f.read()
     else:
-        course_data = "[]"
+        from .arima import generate_all_forecasts
+        data = generate_all_forecasts()
+        course_data = json.dumps(data)
 
     return render(request, 'home.html', {
         'courses': courses,
         'course_data': course_data
     })
+
 
 
 def rescrape_data(request):

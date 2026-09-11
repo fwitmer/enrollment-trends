@@ -8,7 +8,21 @@ from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_absolute_error
 from sklearn.metrics import root_mean_squared_error
-from csce_scraper import build_term_codes_past_years
+import json
+try:
+    from csce_scraper import (
+        build_term_codes_past_years,
+        term_name_from_code,
+        get_course_prediction_targets,
+        get_course_offered_pattern,
+    )
+except ImportError:
+    from main.csce_scraper import (
+        build_term_codes_past_years,
+        term_name_from_code,
+        get_course_prediction_targets,
+        get_course_offered_pattern,
+    )
 warnings.filterwarnings("ignore")
 
 #django setup
@@ -35,40 +49,38 @@ def hs_value_for_term(term):
 
     return hs_map.get(hs_year, np.nan)
 
-#converts numeric term to non-numeric term (e.g. 202503 ---> Fall 2025)
-def term_name_from_code(term):
-    term = int(term)
-    year, sem = divmod(term, 100)
-    names = {1: "Spring", 2: "Summer", 3: "Fall"}
-    return f"{names.get(sem, 'Unknown')} {year}"
 
-#builds next term based on current term 
-def next_term_code(course_num, spring_count, summer_count, fall_count, yearly_course):
-    last_term = int(group['term'].max())
-    year, sem = divmod(last_term, 100)
-    
+#counts semester steps between last_term and target_term
+def count_steps_between(last_term, target_term, course_num, yearly_course):
+    last_term = int(last_term)
+    target_term = int(target_term)
+    if last_term >= target_term:
+        return 1
+
     if yearly_course:
-        if spring_count > 0 and summer_count == 0 and fall_count == 0: 
-            return (year + 1) * 100 + 1 if sem == 1 else year * 100 + 1
-        if spring_count == 0 and summer_count > 0 and fall_count == 0: 
-            return (year + 1) * 100 + 2 if sem == 2 else year * 100 + 2
-        if spring_count == 0 and summer_count == 0 and fall_count > 0: 
-            return (year + 1) * 100 + 3 if sem == 3 else year * 100 + 3
+        y1 = last_term // 100
+        y2 = target_term // 100
+        return max(1, y2 - y1)
 
-    if course_num > 201:
-        if sem == 1:      #Spring → Fall
-            return year * 100 + 3
-        elif sem == 2:    #Summer → Fall
-            return year * 100 + 3
+    cur = last_term
+    steps = 0
+    while cur < target_term and steps < 10:
+        y, s = divmod(cur, 100)
+        if course_num <= 201:
+            if s == 1:
+                cur = y * 100 + 2
+            elif s == 2:
+                cur = y * 100 + 3
+            else:
+                cur = (y + 1) * 100 + 1
         else:
-            return (year + 1) * 100 + 1
-    else:
-        if sem == 1:      #Spring → Summer
-            return year * 100 + 2
-        elif sem == 2:    #Summer → Fall
-            return year * 100 + 3
-        else:
-            return (year + 1) * 100 + 1
+            if s == 1:
+                cur = y * 100 + 3
+            else:
+                cur = (y + 1) * 100 + 1
+        steps += 1
+    return max(1, steps)
+
 
 #calculates previous term code        
 def previous_term_code(term_code):
@@ -114,26 +126,90 @@ df = df[~(
 )]
 
 df = df.sort_values(['code', 'term'])
+prereq_map = prereq_df.set_index('course_code')[['prereq_1', 'prereq_2']].to_dict('index') if not prereq_df.empty else {}
 
-all_MAES = {"arima": [], "sarima": [], "arimax": [], "sarimax": []}
-prereq_map = prereq_df.set_index('course_code')[['prereq_1', 'prereq_2']].to_dict('index')
-results = []
 
-for code, group in df.groupby('code'):
-    course_num = int(code.split('A')[-1])
-
+def build_exog_data(code, course_num, train_group, target_term, steps, prereq_map, hs_map, full_df):
     prereqs = prereq_map.get(code, {})
     pr1, pr2 = prereqs.get('prereq_1'), prereqs.get('prereq_2')
-    m = 3 if course_num <= 201 else 2
-    y = group['enrolled'].astype(float).values
-    terms = group['term'].astype(int).values
 
-    if len(y) < 4:
-        results.append({
-            "code": code,
-            "title": group['title'].iloc[0],
-            "term": None,
-            "term_name": "Insufficient data",
+    exog_values = []
+    # Add HS grads as exog ONLY for A101
+    if code == "CSCE A101":
+        hs_vals = []
+        for term in train_group['term']:
+            hs_raw = hs_value_for_term(term)
+            hs_vals.append(hs_raw / 50 if not np.isnan(hs_raw) else 0.0)
+        exog_values.append(hs_vals)
+
+    # Prereq 1 and 2
+    for i, prereq_code in enumerate([pr1, pr2]):
+        if prereq_code:
+            lagged = []
+            for term in train_group['term']:
+                lag_term = get_previous_term(term, i + 1, course_num > 201)
+                enroll_row = full_df[(full_df['code'] == prereq_code) & (full_df['term'] == lag_term)]
+                val = float(enroll_row['enrolled'].values[0]) if not enroll_row.empty else 0.0
+                lagged.append(val)
+            exog_values.append(lagged)
+        else:
+            exog_values.append([0.0] * len(train_group))
+
+    exog = np.column_stack(exog_values) if exog_values else np.zeros((len(train_group), 1))
+    exog = np.nan_to_num(exog, nan=0.0)
+
+    # Build future exog for forecasting target_term
+    cur_term = train_group['term'].iloc[-1]
+    step_terms = []
+    temp_term = cur_term
+    for _ in range(steps):
+        y, s = divmod(temp_term, 100)
+        if course_num <= 201:
+            temp_term = y * 100 + 2 if s == 1 else (y * 100 + 3 if s == 2 else (y + 1) * 100 + 1)
+        else:
+            temp_term = y * 100 + 3 if s == 1 else (y + 1) * 100 + 1
+        step_terms.append(temp_term)
+
+    target_exog_rows = []
+    for st in step_terms:
+        row_vals = []
+        if code == "CSCE A101":
+            hs_raw = hs_value_for_term(st)
+            row_vals.append(hs_raw / 50 if not np.isnan(hs_raw) else 0.0)
+        for i, prereq_code in enumerate([pr1, pr2]):
+            if prereq_code:
+                lag_t = get_previous_term(st, i + 1, course_num > 201)
+                enroll_row = full_df[(full_df['code'] == prereq_code) & (full_df['term'] == lag_t)]
+                val = float(enroll_row['enrolled'].values[0]) if not enroll_row.empty else 0.0
+                row_vals.append(val)
+            else:
+                row_vals.append(0.0)
+        target_exog_rows.append(row_vals)
+
+    next_exog = np.array(target_exog_rows) if target_exog_rows else np.zeros((steps, 1))
+    next_exog = np.nan_to_num(next_exog, nan=0.0)
+    return exog, next_exog
+
+
+def fit_target_forecast(code, course_num, full_group, target_term, prereq_map, hs_map, full_df, yearly_course):
+    target_term = int(target_term)
+    target_name = term_name_from_code(target_term)
+
+    # Actual enrollment in DB for target_term (if exists and > 0)
+    actual_rows = full_df[(full_df['code'] == code) & (full_df['term'] == target_term)]
+    actual_enrolled = None
+    if not actual_rows.empty:
+        enr = int(actual_rows['enrolled'].values[0])
+        if enr > 0:
+            actual_enrolled = enr
+
+    # Training data: strictly prior to target_term
+    train_group = full_group[full_group['term'] < target_term].sort_values('term')
+    if len(train_group) < 4:
+        return {
+            "term": target_term,
+            "term_name": target_name,
+            "actual_enrolled": actual_enrolled,
             "arima_forecast": None,
             "sarima_forecast": None,
             "arimax_forecast": None,
@@ -142,325 +218,238 @@ for code, group in df.groupby('code'):
             "sarima_mae": None,
             "arimax_mae": None,
             "sarimax_mae": None,
-            "best_accuracy": None
-        })
-        continue
+            "best_accuracy": None,
+            "arima_val_terms": None,
+            "arima_val_preds": None,
+            "sarima_val_terms": None,
+            "sarima_val_preds": None,
+            "arimax_val_terms": None,
+            "arimax_val_preds": None,
+            "sarimax_val_terms": None,
+            "sarimax_val_preds": None,
+        }
 
-    exog_values = []
-    #Add HS grads as exog ONLY for A101
-    if code == "CSCE A101":
-        hs_vals = []
-        for term in group['term']:
-            hs_raw = hs_value_for_term(term)
+    y = train_group['enrolled'].astype(float).values
+    terms = train_group['term'].astype(int).values
+    last_term = terms[-1]
+    steps = count_steps_between(last_term, target_term, course_num, yearly_course)
 
-            if not np.isnan(hs_raw):
-                hs_vals.append(hs_raw / 50)
-            else:
-                hs_vals.append(0)
+    m = 3 if course_num <= 201 else 2
+    exog, next_exog = build_exog_data(code, course_num, train_group, target_term, steps, prereq_map, hs_map, full_df)
 
-        exog_values.append(hs_vals)
-
-    #Prereq_1/2 → lag 1/2 (two-term back)
-    for i, prereq_code in enumerate([pr1, pr2]):
-        if prereq_code:
-            lagged_values = []
-            for term in group['term']:
-                lag_term = get_previous_term(term, i + 1, course_num > 201)
-                enroll_row = df[(df['code'] == prereq_code) & (df['term'] == lag_term)]
-
-                #Get the enrollment value or set 0 if missing
-                if not enroll_row.empty:
-                    value = float(enroll_row['enrolled'].values[0])
-                else:
-                    value = np.nan  
-
-                lagged_values.append(value)
-
-                #Print for verification
-                print(
-                    f"{code} term {term} → lag {i+1} ({prereq_code}) term {lag_term}: "
-                    f"{value if value != 0 else 'MISSING (set 0)'}"
-                )
-
-            exog_values.append(lagged_values)
-        else:
-            exog_values.append(np.zeros(len(group)))
-
-    exog = np.column_stack(exog_values) if exog_values else np.zeros((len(group), 1))
-    if course_num <= 201:
-        valid_idx = ~np.isnan(exog).any(axis=1)
-        y = y[valid_idx]
-        exog = exog[valid_idx]
-    else:
-        #For upper-level courses like A470, fill missing prereq enrollments with 0
-        exog = np.nan_to_num(exog, nan=0.0)
-    
-    #Skip exogenous variables for courses with no prerequisites (except A101)
+    arima_forecast = None
+    sarima_forecast = None
+    arimax_forecast = None
+    sarimax_forecast = None
 
     arima_mae = None
     sarima_mae = None
     arimax_mae = None
     sarimax_mae = None
 
+    arima_val_terms, arima_val_preds = None, None
+    sarima_val_terms, sarima_val_preds = None, None
+    arimax_val_terms, arimax_val_preds = None, None
+    sarimax_val_terms, sarimax_val_preds = None, None
+
+    models_accuracy = []
+
+    # 1. ARIMA
     try:
-        if len(y) < 4:
-            results.append({
-                "code": code,
-                "title": group['title'].iloc[0],
-                "term": None,
-                "term_name": "Insufficient data",
-                "arima_forecast": None,
-                "sarima_forecast": None,
-                "arimax_forecast": None,
-                "sarimax_forecast": None,
-                "arima_mae": None,
-                "sarima_mae": None,
-                "arimax_mae": None,
-                "sarimax_mae": None,
-                "best_accuracy": None
-            })
-            continue
-        
-        spring_count = 0 
-        summer_count = 0 
-        fall_count = 0 
-        yearly_course = False
-        for term in group['term']: 
-            temp = divmod(term, 100) 
-            temp = temp[1] 
-            if temp == 1: 
-                spring_count += 1 
-            elif temp == 2: 
-                summer_count += 1 
-            elif temp == 3: fall_count += 1 
-        if spring_count > 0 and summer_count == 0 and fall_count == 0: 
-            yearly_course = True
-        elif spring_count == 0 and summer_count > 0 and fall_count == 0: 
-            yearly_course = True
-        elif spring_count == 0 and summer_count == 0 and fall_count > 0: 
-            yearly_course = True
-        else:
-            yearly_course = False
-        next_term = next_term_code(course_num, spring_count, summer_count, fall_count, yearly_course)
-
-        if code == "CSCE A115" and (next_term % 100) == 2:
-            year = next_term // 100
-            next_term = year * 100 + 3
-
-        models_accuracy = []
-
-        #ARIMA forecast
-        model = ARIMA(y, order=(1, 1, 1))
-        fit = model.fit()
-        arima_forecast = fit.forecast(steps=1)[0]
-        arima_forecast = max(round(arima_forecast, 0), 0)
-        arima_val_terms, arima_val_preds = None, None  #store testing info
+        model = ARIMA(y, order=(1, 1, 1)).fit()
+        preds = np.ravel(model.forecast(steps=steps))
+        arima_forecast = max(0.0, round(float(preds[-1]), 0))
 
         if len(y) >= 4:
             try:
-                train, test = y[:-2], y[-2:]
-                train_terms, test_terms = terms[:-2], terms[-2:]
-                model_eval = ARIMA(train, order=(1, 1, 1)).fit()
-                preds = model_eval.forecast(steps=len(test))
-                test = np.ravel(test)
-                preds = np.ravel(preds)
+                tr, te = y[:-2], y[-2:]
+                tr_terms, te_terms = terms[:-2], terms[-2:]
+                val_fit = ARIMA(tr, order=(1, 1, 1)).fit()
+                val_preds = np.ravel(val_fit.forecast(steps=len(te)))
+                arima_mae = round(float(mean_absolute_error(te, val_preds)), 2)
+                arima_val_terms = te_terms.tolist()
+                arima_val_preds = [max(0.0, round(float(p), 0)) for p in val_preds]
+                acc = 100 - (arima_mae / te.mean() * 100) if te.mean() > 0 else 0
+                models_accuracy.append(acc)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"ARIMA error for {code}: {e}")
 
-                arima_mae = mean_absolute_error(test, preds)
+    # 2. SARIMA (non-yearly courses only)
+    if not yearly_course:
+        try:
+            model = SARIMAX(y, order=(1, 1, 1), seasonal_order=(1, 1, 1, m)).fit(disp=False)
+            preds = np.ravel(model.forecast(steps=steps))
+            sarima_forecast = max(0.0, round(float(preds[-1]), 0))
 
-                all_MAES["arima"].append(arima_mae)
-                preds = [max(round(p, 0), 0) for p in preds]
-                arima_val_terms = test_terms.tolist()
-                arima_val_preds = preds
+            if len(y) >= 4:
+                try:
+                    tr, te = y[:-2], y[-2:]
+                    tr_terms, te_terms = terms[:-2], terms[-2:]
+                    val_fit = SARIMAX(tr, order=(1, 1, 1), seasonal_order=(1, 1, 1, m)).fit(disp=False)
+                    val_preds = np.ravel(val_fit.forecast(steps=len(te)))
+                    sarima_mae = round(float(mean_absolute_error(te, val_preds)), 2)
+                    sarima_val_terms = te_terms.tolist()
+                    sarima_val_preds = [max(0.0, round(float(p), 0)) for p in val_preds]
+                    acc = 100 - (sarima_mae / te.mean() * 100) if te.mean() > 0 else 0
+                    models_accuracy.append(acc)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"SARIMA error for {code}: {e}")
 
-                arima_accuracy = 100 - (arima_mae / y[-2:].mean() * 100)
-                models_accuracy.append(arima_accuracy)
-                print(f"{code}: ARIMA MAE={arima_mae:.1f}")
-            except Exception as inner_e:
-                print(f"Metrics didn't calculate for {code}: {inner_e}")
-
-        #SARIMA forecast
-        model = SARIMAX(y, order=(1, 1, 1), seasonal_order=(1, 1, 1, m))
-        fit = model.fit(disp=False)
-        sarima_forecast = fit.forecast(steps=1)[0]
-        sarima_forecast = max(round(sarima_forecast, 0), 0)
-        sarima_val_terms, sarima_val_preds = None, None
-
-        if len(y) >= 4:
-            try:
-                train, test = y[:-2], y[-2:]
-                train_terms, test_terms = terms[:-2], terms[-2:]
-                model_eval = SARIMAX(train, order=(1, 1, 1), seasonal_order=(1, 1, 1, m)).fit()
-                preds = model_eval.forecast(steps=len(test))
-                test = np.ravel(test)
-                preds = np.ravel(preds)
-
-                sarima_mae = mean_absolute_error(test, preds)
-
-                all_MAES["sarima"].append(sarima_mae)
-                preds = [max(round(p, 0), 0) for p in preds]
-                sarima_val_terms = test_terms.tolist()
-                sarima_val_preds = preds
-                sarima_accuracy = 100 - (sarima_mae / y[-2:].mean() * 100)
-                models_accuracy.append(sarima_accuracy)
-                print(f"{code}: SARIMA MAE={sarima_mae:.1f}")
-            except Exception as inner_e:
-                print(f"Metrics didn't calculate for {code}: {inner_e}")
-
-        #ARIMAX forecast (uses prerequisite enrollment as exogenous variable)
-        model = ARIMA(y, exog=exog, order=(1, 1, 1))
-        fit = model.fit()
-        next_exog = exog[-1].reshape(1, -1)
-        arimax_forecast = fit.forecast(steps=1, exog=next_exog)[0]
-        arimax_forecast = max(round(arimax_forecast, 0), 0)
-        arimax_val_terms, arimax_val_preds = None, None
+    # 3. ARIMAX
+    try:
+        model = ARIMA(y, exog=exog, order=(1, 1, 1)).fit()
+        preds = np.ravel(model.forecast(steps=steps, exog=next_exog))
+        arimax_forecast = max(0.0, round(float(preds[-1]), 0))
 
         if len(y) >= 4:
             try:
-                train, test = y[:-2], y[-2:]
-                train_exog, test_exog = exog[:-2], exog[-2:]
-                train_terms, test_terms = terms[:-2], terms[-2:]
-                model_eval = ARIMA(train, exog=train_exog, order=(1, 1, 1)).fit()
-                preds = model_eval.forecast(steps=len(test), exog=test_exog)
-                test = np.ravel(test)
-                preds = np.ravel(preds)
+                tr, te = y[:-2], y[-2:]
+                tr_exog, te_exog = exog[:-2], exog[-2:]
+                tr_terms, te_terms = terms[:-2], terms[-2:]
+                val_fit = ARIMA(tr, exog=tr_exog, order=(1, 1, 1)).fit()
+                val_preds = np.ravel(val_fit.forecast(steps=len(te), exog=te_exog))
+                arimax_mae = round(float(mean_absolute_error(te, val_preds)), 2)
+                arimax_val_terms = te_terms.tolist()
+                arimax_val_preds = [max(0.0, round(float(p), 0)) for p in val_preds]
+                acc = 100 - (arimax_mae / te.mean() * 100) if te.mean() > 0 else 0
+                models_accuracy.append(acc)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"ARIMAX error for {code}: {e}")
 
-                arimax_mae = mean_absolute_error(test, preds)
+    # 4. SARIMAX (non-yearly courses only)
+    if not yearly_course:
+        try:
+            seasonal_order = (1, 0, 1, 2) if code == "CSCE A201" else (1, 1, 1, m)
+            model = SARIMAX(y, exog=exog, order=(1, 1, 1), seasonal_order=seasonal_order).fit(disp=False)
+            preds = np.ravel(model.forecast(steps=steps, exog=next_exog))
+            sarimax_forecast = max(0.0, round(float(preds[-1]), 0))
 
-                all_MAES.setdefault("arimax", []).append(arimax_mae)
-                preds = [max(round(p, 0), 0) for p in preds]
-                arimax_val_terms = test_terms.tolist()
-                arimax_val_preds = preds
-                arimax_accuracy = 100 - (arimax_mae / y[-2:].mean() * 100)
-                models_accuracy.append(arimax_accuracy)
-                print(f"{code}: ARIMAX MAE={arimax_mae:.1f}")
-            except Exception as inner_e:
-                print(f"Metrics didn't calculate for {code} (ARIMAX): {inner_e}")
-
-        #SARIMAX forecast
-        if code == "CSCE A201":
-            model = SARIMAX(y, exog=exog,
-                            order=(1, 1, 1),
-                            seasonal_order=(1, 0, 1, 2))
-        else:
-            model = SARIMAX(y, exog=exog,
-                            order=(1, 1, 1),
-                            seasonal_order=(1, 1, 1, m))
-
-        fit = model.fit(disp=False)
-        next_exog = exog[-1].reshape(1, -1)
-        sarimax_forecast = fit.forecast(steps=1, exog=next_exog)[0]
-        sarimax_forecast = max(round(sarimax_forecast, 0), 0)
-        sarimax_val_terms, sarimax_val_preds = None, None
-
-        #SARIMAX validation
-        if len(y) >= 4:
-            try:
-                train, test = y[:-2], y[-2:]
-                train_exog, test_exog = exog[:-2], exog[-2:]
-                train_terms, test_terms = terms[:-2], terms[-2:]
-
-                #Special case for A201 again in validation
-                if code == "CSCE A201":
-                    model_eval = SARIMAX(train, exog=train_exog,
-                                        order=(1, 1, 1),
-                                        seasonal_order=(1, 0, 1, 2)).fit()
-                else:
-                    model_eval = SARIMAX(train, exog=train_exog,
-                                        order=(1, 1, 1),
-                                        seasonal_order=(1, 1, 1, m)).fit()
-
-                preds = model_eval.forecast(steps=len(test), exog=test_exog)
-                test = np.ravel(test)
-                preds = np.ravel(preds)
-
-                sarimax_mae = mean_absolute_error(test, preds)
-
-                all_MAES["sarimax"].append(sarimax_mae)
-                preds = [max(round(p, 0), 0) for p in preds]
-                sarimax_val_terms = test_terms.tolist()
-                sarimax_val_preds = preds
-                sarimax_accuracy = 100 - (sarimax_mae / y[-2:].mean() * 100)
-                models_accuracy.append(sarimax_accuracy)
-
-                print(f"{code}: SARIMAX MAE={sarimax_mae:.1f}")
-
-            except Exception as inner_e:
-                print(f"Metrics didn't calculate for {code}: {inner_e}")
+            if len(y) >= 4:
+                try:
+                    tr, te = y[:-2], y[-2:]
+                    tr_exog, te_exog = exog[:-2], exog[-2:]
+                    tr_terms, te_terms = terms[:-2], terms[-2:]
+                    val_fit = SARIMAX(tr, exog=tr_exog, order=(1, 1, 1), seasonal_order=seasonal_order).fit(disp=False)
+                    val_preds = np.ravel(val_fit.forecast(steps=len(te), exog=te_exog))
+                    sarimax_mae = round(float(mean_absolute_error(te, val_preds)), 2)
+                    sarimax_val_terms = te_terms.tolist()
+                    sarimax_val_preds = [max(0.0, round(float(p), 0)) for p in val_preds]
+                    acc = 100 - (sarimax_mae / te.mean() * 100) if te.mean() > 0 else 0
+                    models_accuracy.append(acc)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"SARIMAX error for {code}: {e}")
 
 
-        if arima_mae is not None:
-            arima_mae = round(arima_mae, 2)
-        if sarima_mae is not None:
-            sarima_mae = round(sarima_mae, 2)
-        if arimax_mae is not None: 
-            arimax_mae = round(arimax_mae, 2)
-        if sarimax_mae is not None:
-            sarimax_mae = round(sarimax_mae, 2)
+    best_accuracy = round(max(models_accuracy), 1) if models_accuracy else None
 
-        best_accuracy = max(models_accuracy) if models_accuracy else None
+    return {
+        "term": target_term,
+        "term_name": target_name,
+        "actual_enrolled": actual_enrolled,
+        "arima_forecast": arima_forecast,
+        "sarima_forecast": sarima_forecast,
+        "arimax_forecast": arimax_forecast,
+        "sarimax_forecast": sarimax_forecast,
+        "arima_mae": arima_mae,
+        "sarima_mae": sarima_mae,
+        "arimax_mae": arimax_mae,
+        "sarimax_mae": sarimax_mae,
+        "best_accuracy": best_accuracy,
+        "arima_val_terms": arima_val_terms,
+        "arima_val_preds": arima_val_preds,
+        "sarima_val_terms": sarima_val_terms,
+        "sarima_val_preds": sarima_val_preds,
+        "arimax_val_terms": arimax_val_terms,
+        "arimax_val_preds": arimax_val_preds,
+        "sarimax_val_terms": sarimax_val_terms,
+        "sarimax_val_preds": sarimax_val_preds,
+    }
 
-        group['year'] = group['term'] // 100
-        year_counts = group['year'].value_counts()
 
-        valid_years = []
-        for year, count in year_counts.items():
-            if count >= 2:
-                valid_years.append(year)
-                
-        yearly_totals = (
-            group[group['year'].isin(valid_years)]
-            .groupby('year')['enrolled']
-            .sum()
-            .to_dict()
-        )      
-        #json data storage
-        results.append({
-            "code": code,
-            "title": group['title'].iloc[0],
-            "term": next_term,
-            "term_name": term_name_from_code(next_term),
-            "arima_forecast": arima_forecast,
-            "sarima_forecast": sarima_forecast,
-            "arimax_forecast": arimax_forecast,
-            "sarimax_forecast": sarimax_forecast,
-            "arima_mae": arima_mae,
-            "sarima_mae": sarima_mae,
-            "arimax_mae": arimax_mae,
-            "sarimax_mae": sarimax_mae,
-            "arima_val_terms": arima_val_terms,
-            "arima_val_preds": arima_val_preds,
-            "sarima_val_terms": sarima_val_terms,
-            "sarima_val_preds": sarima_val_preds,
-            "arimax_val_terms": arimax_val_terms,
-            "arimax_val_preds": arimax_val_preds,
-            "sarimax_val_terms": sarimax_val_terms,
-            "sarimax_val_preds": sarimax_val_preds,
-            "yearly_course": yearly_course,
-            "best_accuracy": best_accuracy,
-            "yearly_totals": yearly_totals
+def generate_all_forecasts():
+    qs = Course.objects.all().values('code', 'term', 'enrolled', 'title')
+    df_all = pd.DataFrame(qs)
+    df_all['term'] = df_all['term'].astype(int)
+    df_all['term_name'] = df_all['term'].apply(term_name_from_code)
+    df_all['course_num'] = df_all['code'].str.extract(r'A(\d+)').astype(int)
+
+    # Filter out Summer terms for A211+ only (CSCE A101 and A201 retain all summer data)
+    df_filtered = df_all[~(
+        (df_all['course_num'] > 201) &
+        (df_all['term_name'].str.contains("Summer", case=False, na=False))
+    )].copy()
+    df_filtered = df_filtered.sort_values(['code', 'term'])
+
+    historical_records = []
+    for _, row in df_filtered.iterrows():
+        historical_records.append({
+            "code": row['code'],
+            "term": int(row['term']),
+            "term_name": row['term_name'],
+            "enrolled": int(row['enrolled']),
+            "title": row['title']
         })
 
-    except Exception as e:
-        print(f"Error with {code}: {e}")
+    predictions_by_course = {}
 
-forecast_df = pd.DataFrame(results)
-combined_df = pd.concat([df[['code', 'term', 'term_name', 'enrolled', 'title']], forecast_df])
+    for code, group in df_filtered.groupby('code'):
+        course_num = int(code.split('A')[-1])
+        title = group['title'].iloc[0]
+        terms = group['term'].tolist()
 
-output_path = os.path.join("main", "forecast_data.json")
-combined_df.to_json(output_path, orient="records", indent=4)
+        # Check if yearly course
+        spring_count = sum(1 for t in terms if t % 100 == 1)
+        summer_count = sum(1 for t in terms if t % 100 == 2)
+        fall_count = sum(1 for t in terms if t % 100 == 3)
+        yearly_course = (spring_count > 0 and summer_count == 0 and fall_count == 0) or \
+                        (spring_count == 0 and summer_count == 0 and fall_count > 0)
 
-'''
-print(f"Saved combined data to {output_path}")
-print(f"Generated forecasts for {len(results)} courses.")
+        targets = get_course_prediction_targets(terms)
+        pattern = get_course_offered_pattern(terms)
 
-#average model performance
-print("\n===== Average Model Performance =====")
-for model_name in ["arima", "sarima", "arimax", "sarimax"]:
-    mae_list = all_MAES.get(model_name, [])
-    if mae_list:
-        avg_mae = np.mean(mae_list)
-        print(f"{model_name.upper():6} → MAE={avg_mae:.1f}")
-    else:
-        print(f"{model_name.upper():6} → No valid results")
-print("======================================\n")
-'''
+        target_forecasts = {}
+        for mode in ['prior', 'current', 'future']:
+            tgt_term = targets[mode]
+            forecast_dict = fit_target_forecast(
+                code=code,
+                course_num=course_num,
+                full_group=group,
+                target_term=tgt_term,
+                prereq_map=prereq_map,
+                hs_map=hs_map,
+                full_df=df_all,
+                yearly_course=yearly_course
+            )
+            target_forecasts[mode] = forecast_dict
+
+        predictions_by_course[code] = {
+            "course_name": code,
+            "title": title,
+            "yearly_course": yearly_course,
+            "offered_pattern": pattern,
+            "targets": target_forecasts
+        }
+
+    output_data = {
+        "historical": historical_records,
+        "predictions": predictions_by_course
+    }
+
+    output_path = os.path.join(BASE_DIR, "main", "forecast_data.json")
+    with open(output_path, "w") as f:
+        json.dump(output_data, f, indent=4)
+    print(f"Successfully generated forecasts for {len(predictions_by_course)} courses and saved to {output_path}")
+    return output_data
+
+
+if __name__ == "__main__":
+    generate_all_forecasts()
+
