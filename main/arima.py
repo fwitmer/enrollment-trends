@@ -106,7 +106,8 @@ def get_previous_term(term, steps_back, upper_level=False):
     return lag_term
 
 #load data from the Course model
-qs = Course.objects.all().values('code', 'term', 'enrolled', 'title')
+EXCLUDED_COURSES = {'CSCE A381', 'CSCE A412'}
+qs = Course.objects.exclude(code__in=EXCLUDED_COURSES).values('code', 'term', 'enrolled', 'title')
 df = pd.DataFrame(qs)
 
 #load prerequisite data into a DataFrame
@@ -375,7 +376,7 @@ def fit_target_forecast(code, course_num, full_group, target_term, prereq_map, h
 
 
 def generate_all_forecasts():
-    qs = Course.objects.all().values('code', 'term', 'enrolled', 'title')
+    qs = Course.objects.exclude(code__in=EXCLUDED_COURSES).values('code', 'term', 'enrolled', 'title')
     df_all = pd.DataFrame(qs)
     df_all['term'] = df_all['term'].astype(int)
     df_all['term_name'] = df_all['term'].apply(term_name_from_code)

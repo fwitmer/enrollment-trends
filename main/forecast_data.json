@@ -925,13 +925,6 @@
             "title": "Fndmntls Cryptocurrency Tech"
         },
         {
-            "code": "CSCE A381",
-            "term": 202103,
-            "term_name": "Fall 2021",
-            "enrolled": 6,
-            "title": "Computer Graphics"
-        },
-        {
             "code": "CSCE A395",
             "term": 202101,
             "term_name": "Spring 2021",
@@ -1077,20 +1070,6 @@
             "term_name": "Fall 2026",
             "enrolled": 20,
             "title": "Artificial Intelligence"
-        },
-        {
-            "code": "CSCE A412",
-            "term": 202101,
-            "term_name": "Spring 2021",
-            "enrolled": 18,
-            "title": "Evolutionary Computing"
-        },
-        {
-            "code": "CSCE A412",
-            "term": 202201,
-            "term_name": "Spring 2022",
-            "enrolled": 21,
-            "title": "Evolutionary Computing"
         },
         {
             "code": "CSCE A415",
@@ -3198,80 +3177,6 @@
                 }
             }
         },
-        "CSCE A381": {
-            "course_name": "CSCE A381",
-            "title": "Computer Graphics",
-            "yearly_course": true,
-            "offered_pattern": "fall_only",
-            "targets": {
-                "prior": {
-                    "term": 202503,
-                    "term_name": "Fall 2025",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                },
-                "current": {
-                    "term": 202603,
-                    "term_name": "Fall 2026",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                },
-                "future": {
-                    "term": 202703,
-                    "term_name": "Fall 2027",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                }
-            }
-        },
         "CSCE A395": {
             "course_name": "CSCE A395",
             "title": "Internship in Computing",
@@ -3609,80 +3514,6 @@
                         33.0,
                         31.0
                     ],
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                }
-            }
-        },
-        "CSCE A412": {
-            "course_name": "CSCE A412",
-            "title": "Evolutionary Computing",
-            "yearly_course": true,
-            "offered_pattern": "spring_only",
-            "targets": {
-                "prior": {
-                    "term": 202501,
-                    "term_name": "Spring 2025",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                },
-                "current": {
-                    "term": 202601,
-                    "term_name": "Spring 2026",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
-                    "sarimax_val_terms": null,
-                    "sarimax_val_preds": null
-                },
-                "future": {
-                    "term": 202701,
-                    "term_name": "Spring 2027",
-                    "actual_enrolled": null,
-                    "arima_forecast": null,
-                    "sarima_forecast": null,
-                    "arimax_forecast": null,
-                    "sarimax_forecast": null,
-                    "arima_mae": null,
-                    "sarima_mae": null,
-                    "arimax_mae": null,
-                    "sarimax_mae": null,
-                    "best_accuracy": null,
-                    "arima_val_terms": null,
-                    "arima_val_preds": null,
-                    "sarima_val_terms": null,
-                    "sarima_val_preds": null,
-                    "arimax_val_terms": null,
-                    "arimax_val_preds": null,
                     "sarimax_val_terms": null,
                     "sarimax_val_preds": null
                 }

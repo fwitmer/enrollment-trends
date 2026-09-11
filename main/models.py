@@ -37,6 +37,8 @@ class Course(models.Model):
             print(f"Found {len(results)} courses for {term_code}")
 
             for code, title, enrolled in results:
+                if code.strip() in {"CSCE A381", "CSCE A412"}:
+                    continue
                 if code.strip().upper() == "CSCE A490": # Change so CSCE 490 course title are labels "Speical Topics"
                     title = "Special Topics"
                 cls.objects.update_or_create(

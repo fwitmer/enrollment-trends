@@ -113,6 +113,9 @@ def get_course_prediction_targets(terms, now=None):
     }
 
 
+EXCLUDED_COURSES = {"CSCE A381", "CSCE A412"}
+
+
 def schedule_scraper(term="202503", subj="CSCE"):
     url = "https://curric.uaa.alaska.edu/ajax/ajaxScheduleSearch.php"   #API url might change in the near future a point of failure
     params = {"term": term, "subj": subj}
@@ -133,6 +136,8 @@ def schedule_scraper(term="202503", subj="CSCE"):
                 num = int(re.search(r'\d+', crs).group())  #regular expression that finds the string of numbers, and converts to integers
                 if 100 <= num < 500:    #since we are only gathering data for 100-400 level courses
                     code = row['subj'].upper() + " " + row['crs']   #concatenates the subject and the course (e.g. CSCE A101)
+                    if code.strip() in EXCLUDED_COURSES:
+                        continue
                     title = row['title']
                     enrolled = int(row.get("enrolled")) 
                     totals[code, title] += enrolled  #sums up the enrollment for one course

@@ -33,7 +33,8 @@ def home(request):
     else:
         print("No missing terms. All caught up.")
 
-    courses = Course.objects.values_list('code', flat=True).distinct().order_by('code')
+    EXCLUDED_COURSES = ['CSCE A381', 'CSCE A412']
+    courses = Course.objects.exclude(code__in=EXCLUDED_COURSES).values_list('code', flat=True).distinct().order_by('code')
 
     forecast_path = os.path.join(settings.BASE_DIR, "main", "forecast_data.json")
     if os.path.exists(forecast_path):
@@ -205,7 +206,8 @@ def data(request):
     all_terms = sorted(Course.objects.values_list('term', flat=True).distinct(), reverse=True)
     courses_dict = {}
 
-    for c in Course.objects.all().order_by('code'):
+    EXCLUDED_COURSES = ['CSCE A381', 'CSCE A412']
+    for c in Course.objects.exclude(code__in=EXCLUDED_COURSES).order_by('code'):
         if c.code not in courses_dict:
             courses_dict[c.code] = {'title': c.title, 'enrolled_list': []}
 
@@ -228,7 +230,8 @@ def download_data(request):
     all_terms = sorted(Course.objects.values_list('term', flat=True).distinct(), reverse=True)
     courses_dict = {}
 
-    for c in Course.objects.all().order_by('code'):
+    EXCLUDED_COURSES = ['CSCE A381', 'CSCE A412']
+    for c in Course.objects.exclude(code__in=EXCLUDED_COURSES).order_by('code'):
         if c.code not in courses_dict:
             courses_dict[c.code] = {'title': c.title, 'enrolled_list': []}
 
