@@ -1505,12 +1505,12 @@
                     "actual_enrolled": 43,
                     "arima_forecast": 55.0,
                     "sarima_forecast": 42.0,
-                    "arimax_forecast": 40.0,
-                    "sarimax_forecast": 41.0,
+                    "arimax_forecast": 56.0,
+                    "sarimax_forecast": 55.0,
                     "arima_mae": 33.54,
                     "sarima_mae": 19.73,
-                    "arimax_mae": 44.03,
-                    "sarimax_mae": 20.81,
+                    "arimax_mae": 33.72,
+                    "sarimax_mae": 25.84,
                     "best_accuracy": 45.9,
                     "arima_val_terms": [
                         202502,
@@ -1533,16 +1533,16 @@
                         202503
                     ],
                     "arimax_val_preds": [
-                        81.0,
-                        80.0
+                        71.0,
+                        69.0
                     ],
                     "sarimax_val_terms": [
                         202502,
                         202503
                     ],
                     "sarimax_val_preds": [
-                        18.0,
-                        95.0
+                        0.0,
+                        85.0
                     ]
                 },
                 "current": {
@@ -1551,12 +1551,12 @@
                     "actual_enrolled": 74,
                     "arima_forecast": 49.0,
                     "sarima_forecast": 36.0,
-                    "arimax_forecast": 42.0,
-                    "sarimax_forecast": 36.0,
+                    "arimax_forecast": 33.0,
+                    "sarimax_forecast": 73.0,
                     "arima_mae": 25.09,
                     "sarima_mae": 10.47,
-                    "arimax_mae": 14.79,
-                    "sarimax_mae": 16.9,
+                    "arimax_mae": 33.22,
+                    "sarimax_mae": 26.9,
                     "best_accuracy": 65.1,
                     "arima_val_terms": [
                         202601,
@@ -1579,16 +1579,16 @@
                         202602
                     ],
                     "arimax_val_preds": [
-                        40.0,
-                        44.0
+                        56.0,
+                        70.0
                     ],
                     "sarimax_val_terms": [
                         202601,
                         202602
                     ],
                     "sarimax_val_preds": [
-                        41.0,
-                        0.0
+                        55.0,
+                        59.0
                     ]
                 },
                 "future": {
@@ -1597,13 +1597,13 @@
                     "actual_enrolled": null,
                     "arima_forecast": 41.0,
                     "sarima_forecast": 48.0,
-                    "arimax_forecast": 36.0,
-                    "sarimax_forecast": 45.0,
+                    "arimax_forecast": 40.0,
+                    "sarimax_forecast": 57.0,
                     "arima_mae": 29.95,
                     "sarima_mae": 35.05,
-                    "arimax_mae": 28.7,
-                    "sarimax_mae": 44.06,
-                    "best_accuracy": 36.9,
+                    "arimax_mae": 30.24,
+                    "sarimax_mae": 24.46,
+                    "best_accuracy": 46.2,
                     "arima_val_terms": [
                         202602,
                         202603
@@ -1625,16 +1625,16 @@
                         202603
                     ],
                     "arimax_val_preds": [
-                        45.0,
-                        44.0
+                        69.0,
+                        65.0
                     ],
                     "sarimax_val_terms": [
                         202602,
                         202603
                     ],
                     "sarimax_val_preds": [
-                        0.0,
-                        15.0
+                        52.0,
+                        88.0
                     ]
                 }
             }
